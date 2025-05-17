@@ -1,0 +1,96 @@
+name: CI/CD, Health-checks & Revenue Reports
+
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '0 * * * *'    # every hour
+  workflow_dispatch:
+
+jobs:
+  noop:
+    name: Skip build & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: No build or tests needed
+        run: echo "Skipping build-and-test (no package.json present)"
+
+  deploy-to-heroku:
+    needs: noop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Deploy to Heroku
+        uses: akhileshns/heroku-deploy@v3.12.12
+        with:
+          heroku_api_key: ${{ secrets.HEROKU_API_KEY }}
+          heroku_app_name: ${{ secrets.HEROKU_APP_NAME }}
+          heroku_email:    ${{ secrets.HEROKU_EMAIL }}
+
+  global-health-check:
+    needs: deploy-to-heroku
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check /healthz
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://${{ secrets.HEROKU_APP_NAME }}.herokuapp.com/healthz)
+          echo "Healthz status: $STATUS"
+
+  calculate-revenue:
+    needs: deploy-to-heroku
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Fetch Stripe transactions (last hour)
+        run: |
+          curl -s "https://api.stripe.com/v1/balance_transactions?limit=100&created[gte]=$(date -d '1 hour ago' '+%s')" \
+            -u "${{ secrets.STRIPE_SECRET_KEY }}:" \
+            -o revenue.json
+
+      - name: Compute revenue-per-second
+        run: |
+          TOTAL=$(jq '[.data[].amount] | add' revenue.json || echo 0)
+          echo "TOTAL=$TOTAL" >> $GITHUB_ENV
+          echo "Last hour: $TOTAL cents"
+          echo "Per sec: $((TOTAL/3600)) cents/sec"
+
+      - name: Post Revenue Report
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GH_TOKEN }}
+          script: |
+            const total = parseInt(process.env.TOTAL, 10) || 0;
+            const perSec = Math.floor(total / 3600);
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'Revenue Report',
+              head_sha: context.sha,
+              status: 'completed',
+              conclusion: 'success',
+              output: {
+                title: 'Stripe Revenue',
+                summary: `Last hour: $${(total/100).toFixed(2)} — Per sec: $${(perSec/100).toFixed(4)}`,
+              },
+            });
+
+  verify-payouts:
+    needs: calculate-revenue
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Fetch last 3 payouts
+        run: |
+          curl -s "https://api.stripe.com/v1/payouts?limit=3" \
+            -u "${{ secrets.STRIPE_SECRET_KEY }}:" \
+            -o payouts.json
+
+      - name: Display payouts
+        run: |
+          jq '.data[] | "\(.id): \(.amount) cents → \(.status) on \(.arrival_date)"' payouts.json

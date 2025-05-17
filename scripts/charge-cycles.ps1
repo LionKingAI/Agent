@@ -1,7 +1,8 @@
 # Creates a Stripe Checkout Session and prints its URL
 
-# 1) Load your secret key
-$secretKey = $Env:STRIPE_SECRET_KEY
+# 1) Load your secret key and remove any extra spaces/newlines
+$secretKeyRaw = $Env:STRIPE_SECRET_KEY
+$secretKey    = $secretKeyRaw.Trim()
 
 # 2) Build the session request
 $body = @{
@@ -15,7 +16,7 @@ $body = @{
   "cancel_url"                                            = "https://example.com/cancel"
 }
 
-# 3) Call Stripe to make the session
+# 3) Call Stripe to create the Checkout Session
 $response = Invoke-RestMethod `
   -Method Post `
   -Uri 'https://api.stripe.com/v1/checkout/sessions' `

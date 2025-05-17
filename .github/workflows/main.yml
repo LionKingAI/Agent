@@ -41,44 +41,58 @@ jobs:
     needs: deploy-to-heroku
     runs-on: ubuntu-latest
     steps:
+      - name: Install CLI tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
       - name: Fetch Stripe transactions (last hour)
         run: |
-          stripe balance_transactions list \
-            --limit 100 \
-            --key ${{ secrets.STRIPE_SECRET_KEY }} \
-            --created[gte]=$(date -d '1 hour ago' '+%s') > revenue.json
+          curl -s "https://api.stripe.com/v1/balance_transactions?limit=100&created[gte]=$(date -d '1 hour ago' '+%s')" \
+            -u "${{ secrets.STRIPE_SECRET_KEY }}:" \
+            -o revenue.json
+
       - name: Compute revenue-per-second
         run: |
           TOTAL=$(jq '[.data[].amount] | add' revenue.json)
           SECONDS=3600
-          echo "TOTAL=$TOTAL" | tee total.env
+          echo "TOTAL=$TOTAL" >> $GITHUB_ENV
           echo "Last hour: $TOTAL cents"
           echo "Per sec: $((TOTAL/SECONDS)) cents/sec"
+
       - name: Post Revenue Check
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GH_TOKEN }}
           script: |
-            const total = parseInt(process.env.TOTAL)
-            const perSec = Math.floor(total/3600)
+            const total = parseInt(process.env.TOTAL, 10);
+            const perSec = Math.floor(total / 3600);
             await github.rest.checks.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              name: 'Revenue Report',
+              name: "Revenue Report",
               head_sha: context.sha,
-              status: 'completed',
-              conclusion: 'success',
+              status: "completed",
+              conclusion: "success",
               output: {
-                title: 'Stripe Revenue',
+                title: "Stripe Revenue",
                 summary: `Last hour: $${(total/100).toFixed(2)}\nPer-sec: $${(perSec/100).toFixed(4)}`,
-              }
+              },
             });
 
   verify-payouts:
     needs: calculate-revenue
     runs-on: ubuntu-latest
     steps:
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
       - name: Fetch last 3 payouts
-        run: stripe payouts list --limit 3 --key ${{ secrets.STRIPE_SECRET_KEY }} > payouts.json
+        run: |
+          curl -s "https://api.stripe.com/v1/payouts?limit=3" \
+            -u "${{ secrets.STRIPE_SECRET_KEY }}:" \
+            -o payouts.json
+
       - name: Display payouts
-        run: jq '.data[] | "\(.id): \(.amount) cents → \(.status) on \(.arrival_date)"' payouts.json
+        run: |
+          jq '.data[] | "\(.id): \(.amount) cents → \(.status) on \(.arrival_date)"' payouts.json

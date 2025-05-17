@@ -1,0 +1,25 @@
+name: Stripe Automation
+
+# Run on every push to main AND every 15 minutes
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '*/15 * * * *'
+
+jobs:
+  run-stripe-script:
+    runs-on: windows-latest
+    steps:
+      # 1) Check out your code
+      - uses: actions/checkout@v3
+
+      # 2) Set up PowerShell
+      - name: Setup PowerShell
+        uses: actions/setup-powershell@v3
+
+      # 3) Run your script with your secret key
+      - name: Run Stripe Script
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+        run: pwsh scripts/charge-cycles.ps1
